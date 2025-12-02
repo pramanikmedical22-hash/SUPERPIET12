@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SUPERPIET mobile by tirth solanki</title>
+<style>
+  body{margin:0;overflow:hidden;background:#a0d8f0;}
+  canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width=800; canvas.height=500;
+
+const GRAVITY=1, FRICTION=0.85;
+let score=0, lives=3, levelIndex=1;
+const totalLevels=50;
+const maxBlockY=-10000000;
+
+const player={x:50,y:450,w:30,h:40,vx:0,vy:0,onGround:false,canDash:true,dashTime:0,dashTrail:[],startedLevel:false};
+let groundY=480;
+let platforms=[],coins=[],enemies=[],jumpBlocks=[],particles=[];
+let winHeight=100;
+let died=false,deathTimer=0,showWinUI=false,winTimer=0;
+let cameraY=0;
+const keys={};
+
+window.addEventListener('keydown',e=>keys[e.code]=true);
+window.addEventListener('keyup',e=>keys[e.code]=false);
+
+function randomRange(min,max){ return Math.floor(Math.random()*(max-min))+min; }
+function createParticle(x,y){particles.push({x,y,vx:randomRange(-2,2),vy:randomRange(-5,-1),life:30});}
+
+// --- Fixed generateLevel function with dynamic block number per level ---
+function generateLevel(level){
+  let lastY = groundY - 50;
+  let numPlatforms = 6 + Math.floor(level * 1.5); // More blocks for higher levels
+
+  for(let i=0;i<numPlatforms;i++){
+    let py=lastY - randomRange(40,70);
+    if(py < maxBlockY) py=maxBlockY;
+    let px = platforms.length===0 ? randomRange(50,canvas.width-120)
+            : Math.min(Math.max(platforms[platforms.length-1].x + randomRange(-50,100), 20), canvas.width-120);
+    platforms.push({x:px,y:py,w:randomRange(80,120),h:16,dir:Math.random()>0.5?1:-1,move:Math.random()>0.5});
+    lastY = py;
+    if(Math.random()<0.8) coins.push({x:px+randomRange(0,80),y:py-20,w:16,h:16,collected:false});
+  }
+
+  let numEnemies = Math.min(5 + Math.floor(level/2),20);
+  for(let i=0;i<numEnemies;i++){
+    let ex=randomRange(50,canvas.width-50);
+    let ey=platforms[randomRange(0,platforms.length)].y-32;
+    enemies.push({x:ex,y:ey,w:32,h:32,vx:1+level*0.2,dir:Math.random()>0.5?1:-1});
+  }
+
+  if(level>5){
+    let numJumpBlocks=2 + Math.floor(level/10);
+    for(let i=0;i<numJumpBlocks;i++){
+      let jx=randomRange(50, canvas.width-70);
+      let jp=platforms[randomRange(0,platforms.length)].y-20;
+      jumpBlocks.push({x:jx,y:jp,w:40,h:16});
+    }
+  }
+
+  winHeight = groundY - level*100;
+}
+
+function startLevel(level){
+  player.x=50; player.y=groundY-player.h; player.vx=0; player.vy=0; player.onGround=false;
+  player.canDash=true; player.dashTrail=[]; player.startedLevel=false;
+  platforms=[]; coins=[]; enemies=[]; jumpBlocks=[]; particles=[];
+  cameraY=0;
+  generateLevel(level);
+}
+
+startLevel(levelIndex);
+
+function collideRect(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+
+function updatePlayer(){
+  if(died||showWinUI) return;
+
+  if(keys['ArrowLeft']||keys['KeyA']) player.vx=Math.max(player.vx-0.7,-5);
+  if(keys['ArrowRight']||keys['KeyD']) player.vx=Math.min(player.vx+0.7,5);
+  if(!(keys['ArrowLeft']||keys['ArrowRight']||keys['KeyA']||keys['KeyD'])) player.vx*=FRICTION;
+
+  if((keys['ArrowUp']||keys['Space']) && player.onGround){player.vy=-16;player.onGround=false;}
+  if(keys['KeyZ'] && player.canDash){player.vx*=4; player.dashTime=6; player.canDash=false;}
+  if(player.dashTime>0) player.dashTime--; else if(player.onGround) player.canDash=true;
+
+  player.vy+=GRAVITY; if(player.vy>18) player.vy=18;
+  player.x+=player.vx; player.onGround=false; player.y+=player.vy;
+
+  if(player.y+player.h>=groundY){player.y=groundY-player.h;player.vy=0;player.onGround=true;}
+
+  for(const p of platforms){
+    if(p.move) p.x += p.dir*1.2; if(p.x<0||p.x+p.w>canvas.width) p.dir*=-1;
+    if(player.vy>=0 && player.x+player.w>p.x && player.x<p.x+p.w && player.y+player.h>p.y && player.y+player.h<p.y+p.h+player.vy){
+      player.y=p.y-player.h; player.vy=0; player.onGround=true;
+    }
+  }
+
+  for(const jb of jumpBlocks){
+    if(player.vy>=0 && player.x+player.w>jb.x && player.x<jb.x+jb.w && player.y+player.h>jb.y && player.y+player.h<jb.y+jb.h+player.vy){
+      player.y=jb.y-player.h; player.vy=-10; player.onGround=true;
+    }
+  }
+
+  if(!player.startedLevel && player.y<groundY-player.h-5) player.startedLevel=true;
+  if(player.startedLevel && player.y<=winHeight){showWinUI=true;winTimer=90;}
+
+  player.dashTrail.push({x:player.x,y:player.y}); if(player.dashTrail.length>5) player.dashTrail.shift();
+
+  let centerY=canvas.height/2-player.h/2;
+  cameraY+=(player.y-centerY-cameraY)*0.1;
+}
+
+function updateEnemies(){
+  if(died||showWinUI) return;
+  for(const e of enemies){
+    e.x += e.vx*e.dir;
+    if(e.x<0||e.x+e.w>canvas.width) e.dir*=-1;
+    e.y += Math.sin(Date.now()/200)*0.5;
+    if(collideRect(player,e)){
+      if(player.y+player.h<e.y+10){e.x=-50; score+=20;}
+      else{died=true;deathTimer=60;lives--;}
+    }
+  }
+}
+
+function updateCoins(){
+  if(died||showWinUI) return;
+  for(const c of coins) if(!c.collected && collideRect(player,c)){
+    c.collected=true; score+=10; createParticle(c.x+8,c.y+8);
+  }
+}
+
+function updateParticles(){
+  for(let i=particles.length-1;i>=0;i--){
+    let p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vy+=0.2; p.life--;
+    if(p.life<=0) particles.splice(i,1);
+  }
+}
+
+function drawBackground(){
+  let grd = ctx.createLinearGradient(0,0,0,canvas.height);
+  grd.addColorStop(0,'#a0d8f0'); grd.addColorStop(1,'#ffffff');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  ctx.fillStyle='rgba(255,255,255,0.3)';
+  for(let i=0;i<50;i++){ctx.fillRect(Math.random()*canvas.width, Math.random()*canvas.height, 1,1);}
+
+  ctx.font='60px Arial'; ctx.fillStyle='rgba(0,0,0,0.1)';
+  for(let i=-1;i<10;i++){
+    for(let j=-1;j<8;j++){
+      ctx.fillText('TIRTH', i*250+50, j*120+150-cameraY*0.5);
+      ctx.fillText('VIJAY', i*250+120, j*120+200-cameraY*0.5);
+    }
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawBackground();
+
+  ctx.fillStyle='#654'; ctx.fillRect(0,groundY-cameraY,canvas.width,20);
+  for(const p of platforms){ ctx.fillStyle='#777'; ctx.fillRect(p.x,p.y-cameraY,p.w,p.h);}
+  for(const jb of jumpBlocks){ ctx.fillStyle='yellow'; ctx.fillRect(jb.x,jb.y-cameraY,jb.w,jb.h);}
+  for(const c of coins) if(!c.collected){
+    ctx.fillStyle='gold'; ctx.beginPath(); ctx.arc(c.x+8,c.y+8-cameraY,8,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#aa0'; ctx.stroke();
+  }
+  for(const e of enemies){
+    let grd=ctx.createLinearGradient(e.x,e.y-cameraY,e.x+e.w,e.y-cameraY+e.h);
+    grd.addColorStop(0,'#f00'); grd.addColorStop(1,'#800'); ctx.fillStyle=grd;
+    ctx.fillRect(e.x,e.y-cameraY,e.w,e.h);
+    ctx.fillStyle='#fff'; ctx.fillRect(e.x+6,e.y+6-cameraY,5,5); ctx.fillRect(e.x+e.w-11,e.y+6-cameraY,5,5);
+    ctx.fillStyle='rgba(0,0,0,0.2)'; ctx.fillRect(e.x+2,e.y+e.h-cameraY,e.w-4,4);
+  }
+
+  for(const t of player.dashTrail){ ctx.fillStyle='rgba(0,255,0,0.4)'; ctx.fillRect(t.x,t.y-cameraY,player.w,player.h);}
+  let pGrd=ctx.createLinearGradient(player.x,player.y-cameraY,player.x,player.y-cameraY+player.h);
+  pGrd.addColorStop(0,'#0f0'); pGrd.addColorStop(1,'#070'); ctx.fillStyle=pGrd;
+  ctx.fillRect(player.x,player.y-cameraY,player.w,player.h);
+  ctx.fillStyle='#fff'; ctx.fillRect(player.x+6,player.y+8-cameraY,5,5);
+  ctx.fillRect(player.x+player.w-11,player.y+8-cameraY,5,5);
+  ctx.fillStyle='rgba(0,0,0,0.2)'; ctx.fillRect(player.x+2,player.y+player.h-cameraY,player.w-4,4);
+
+  for(const p of particles){ctx.fillStyle='rgba(255,255,0,0.8)'; ctx.fillRect(p.x,p.y-cameraY,3,3);}
+  ctx.fillStyle='#000'; ctx.font='20px Arial';
+  ctx.fillText('Score: '+score,10,20); ctx.fillText('Lives: '+lives,10,40); ctx.fillText('Level: '+levelIndex+'/'+totalLevels,10,60);
+
+  if(died){ctx.fillStyle='rgba(255,0,0,0.4)'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#fff'; ctx.font='60px Arial'; ctx.fillText('YOU DIED',canvas.width/2-150,canvas.height/2);}
+  if(showWinUI){ctx.fillStyle='rgba(0,255,0,0.4)'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#fff'; ctx.font='60px Arial'; ctx.fillText('LEVEL COMPLETE',canvas.width/2-220,canvas.height/2);}
+}
+
+function gameLoop(){
+  if(died){deathTimer--; if(deathTimer<=0){died=false;player.x=50;player.y=groundY-player.h;player.vx=0;player.vy=0;}}
+  else if(showWinUI){winTimer--; if(winTimer<=0){showWinUI=false;levelIndex++;if(levelIndex>totalLevels) levelIndex=1; startLevel(levelIndex);}}
+  else {updatePlayer(); updateEnemies(); updateCoins(); updateParticles();}
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
